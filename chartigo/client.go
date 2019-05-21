@@ -200,7 +200,6 @@ func decodeJSON(body io.ReadCloser, out interface{}) error {
         if err := dec.Decode(&parsed); err != nil {
                 return err
         }
-        log.Printf("PARSED:\n%s", parsed)
 
         decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
                 DecodeHook: mapstructure.ComposeDecodeHookFunc(
@@ -229,7 +228,6 @@ func mapToLinksHookFunc() mapstructure.DecodeHookFunc {
                 }
                 var out *Links
                 err := mapstructure.Decode(data, &out)
-                log.Printf("%#v\n\n\n", out)
                 return out, err
         }
 }
