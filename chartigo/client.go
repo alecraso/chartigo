@@ -1,16 +1,19 @@
 package chartigo
 
 import (
+        "bytes"
         "encoding/json"
         "fmt"
-        "io/ioutil"
+        "io"
         "log"
         "net/http"
         "net/url"
         "os"
+        "reflect"
         "runtime"
-        "strings"
         "time"
+
+        "github.com/mitchellh/mapstructure"
 )
 
 const (
@@ -33,7 +36,7 @@ const (
         DefaultAPIVersion = "v1"
 
         // TimeParseFormat correctly parses timestamps returned by the Chartio API
-        TimeParseFormat
+        TimeParseFormat = "2006-01-02T15:04:05.999999"
 )
 
 var (
@@ -67,33 +70,16 @@ type (
 
         // Link represents a url value returned from the Chartio API
         Link struct {
-                href string `json:"href"`
+                href string
         }
 
         // Links represents the standard link map returned by the Chartio API
         Links struct {
-                self     Link `json:"self,omitempty"`
-                next     Link `json:"next,omitempty"`
-                previous Link `json:"previous,omitempty"`
-        }
-
-        // Unmarshaler interface for types that can unmarshal JSON
-        Unmarshaler interface {
-                UnmarshalJSON([]byte) error
-        }
-
-        // JSONTime type for parsing timestamps returned by the Chartio API
-        JSONTime struct {
-                time.Time
+                self     *Link
+                next     *Link
+                previous *Link
         }
 )
-
-// UnmarshalJSON properly parses timestamps from the ChartioAPI
-func (j *JSONTime) UnmarshalJSON(b []byte) (err error) {
-        s := strings.Trim(string(b), "\"")
-        j.Time, err = time.Parse("2006-01-02T15:04:05.999999", s)
-        return
-}
 
 // NewClient creates a client object for querying the Chartio API
 func NewClient(i NewClientInput) *Client {
@@ -123,12 +109,51 @@ func NewClient(i NewClientInput) *Client {
         return client
 }
 
-func (c *Client) request(m, p string, v interface{}) (*http.Response, error) {
+// Get issues a GET request on the given endpoint
+func (c *Client) Get(p string, v interface{}) (*http.Response, error) {
+        return c.request("GET", p, nil, v)
+}
+
+// Head issues a HEAD request on the given endpoint
+func (c *Client) Head(p string, v interface{}) (*http.Response, error) {
+        return c.request("HEAD", p, nil, v)
+}
+
+// Patch issues a PATCH request on the given endpoint
+func (c *Client) Patch(p string, i, v interface{}) (*http.Response, error) {
+        return c.request("PATCH", p, i, v)
+}
+
+// Post issues a POST request on the given endpoint
+func (c *Client) Post(p string, i, v interface{}) (*http.Response, error) {
+        return c.request("POST", p, i, v)
+}
+
+// Put issues a PUT request on the given endpoint
+func (c *Client) Put(p string, i, v interface{}) (*http.Response, error) {
+        return c.request("PUT", p, i, v)
+}
+
+// Delete issues a DELETE request on the given endpoint
+func (c *Client) Delete(p string) (*http.Response, error) {
+        return c.request("DELETE", p, nil, nil)
+}
+
+func (c *Client) request(m, p string, data interface{}, v interface{}) (*http.Response, error) {
         u := c.buildURL(p)
 
-        req, reqErr := http.NewRequest(m, u, nil)
-        if reqErr != nil {
-                return nil, reqErr
+        var body io.Reader
+        if data != nil {
+                b, err := json.Marshal(data)
+                if err != nil {
+                        return nil, err
+                }
+                body = bytes.NewReader(b)
+        }
+
+        req, err := http.NewRequest(m, u, body)
+        if err != nil {
+                return nil, err
         }
 
         req.Header.Set("Content-Type", "application/json")
@@ -136,26 +161,24 @@ func (c *Client) request(m, p string, v interface{}) (*http.Response, error) {
         req.Header.Set("User-Agent", c.UserAgent)
         req.SetBasicAuth(c.APIKey, c.APIPassword)
 
-        resp, respErr := c.HTTPClient.Do(req)
-        if respErr != nil {
-                return nil, respErr
+        resp, err := c.HTTPClient.Do(req)
+        if err != nil {
+                return nil, err
         }
-        defer resp.Body.Close()
 
-        jsn, jsnErr := ioutil.ReadAll(resp.Body)
-        if jsnErr != nil {
-                log.Fatal("Error reading the body", jsnErr)
+        if v != nil {
+                if err := decodeJSON(resp.Body, v); err != nil {
+                        return resp, err
+                }
         }
-        jsnErr = json.Unmarshal(jsn, &v)
-
-        return resp, jsnErr
+        return resp, err
 }
 
 func (c *Client) buildURL(p string) string {
         return c.BaseURL.String() + p
 }
 
-func getAPIEnvVariables() (k string, p string, err error) {
+func getAPIEnvVariables() (k, p string, err error) {
         errMsg := "Error: environment variable %s not found, required for authentication."
         k, kOK := os.LookupEnv(APIKeyEnvVar)
         if !kOK {
@@ -166,4 +189,63 @@ func getAPIEnvVariables() (k string, p string, err error) {
                 return "", "", fmt.Errorf(errMsg, APIPasswordEnvVar)
         }
         return k, p, nil
+}
+
+// decodeJSON is used to decode an HTTP response body into an interface as JSON.
+func decodeJSON(body io.ReadCloser, out interface{}) error {
+        defer body.Close()
+
+        var parsed interface{}
+        dec := json.NewDecoder(body)
+        if err := dec.Decode(&parsed); err != nil {
+                return err
+        }
+
+        decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+                DecodeHook: mapstructure.ComposeDecodeHookFunc(
+                        stringToTimeHookFunc(),
+                        mapToLinksHookFunc(),
+                ),
+                WeaklyTypedInput: true,
+                Result:           out,
+        })
+        if err != nil {
+                return err
+        }
+        return decoder.Decode(parsed)
+}
+
+func mapToLinksHookFunc() mapstructure.DecodeHookFunc {
+        return func(
+                f reflect.Type,
+                t reflect.Type,
+                data interface{}) (interface{}, error) {
+                if f.Kind() != reflect.Map {
+                        return data, nil
+                }
+                if t.Name() != "Links" {
+                        return data, nil
+                }
+                var out *Links
+                err := mapstructure.Decode(data, &out)
+                return out, err
+        }
+}
+
+// stringToTimeHookFunc returns a function that converts strings to a time.Time value.
+func stringToTimeHookFunc() mapstructure.DecodeHookFunc {
+        return func(
+                f reflect.Type,
+                t reflect.Type,
+                data interface{}) (interface{}, error) {
+                if f.Kind() != reflect.String {
+                        return data, nil
+                }
+                if t != reflect.TypeOf(time.Now()) {
+                        return data, nil
+                }
+
+                // Convert it by parsing
+                return time.Parse(TimeParseFormat, data.(string))
+        }
 }
