@@ -102,7 +102,7 @@ func NewClient(org string, options ...Option) *Client {
         }
 
         for _, option := range options {
-                option(&client)
+                option(client)
         }
 
         return client
