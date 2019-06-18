@@ -2,28 +2,45 @@ package chartigo
 
 import (
         "fmt"
-        "time"
 )
 
 type (
         // User represents a user object in Chartio
         User struct {
-                ID          int       `mapstructure:id`
-                DisplayName string    `mapstructure:display_name,omitempty`
-                Email       string    `mapstructure:email`
-                CreatedAt   time.Time `mapstructure:created_at`
-                UpdatedAt   time.Time `mapstructure:updated_at`
-                Links       Links     `mapstructure:_links`
-                Embedded    Teams     `mapstructure:_embedded`
+                ID          int        `json:"id"`
+                DisplayName string     `json:"display_name,omitempty"`
+                Email       string     `json:"email"`
+                CreatedAt   *ChartioTS `json:"created_at,omitempty"`
+                UpdatedAt   *ChartioTS `json:"updated_at,omitempty"`
+                Teams       *Teams     `json:"_embedded,omitempty"`
+                Links       Links      `json:"_links,omitempty"`
         }
 
         // Users represents an array of users as returned by the Chartio API
         Users struct {
-                Users []User `mapstructure:"users,omitempty"`
-                Count int    `mapstructure:"count,omitempty"`
-                Links Links  `mapstructure:"_links,omitempty"`
+                Users []User `json:"users,omitempty"`
+                Count *int   `json:"count,omitempty"`
+                Links Links  `json:"_links,omitempty"`
+        }
+
+        // UserInput is used as input on all user object functions.
+        UserInput struct {
+                UserID    string `json:"id,omitempty"`
+                UserEmail string `json:"email,omitempty"`
+                Team      *struct {
+                        ID string `json:"id"`
+                } `json:"team,omitempty"`
         }
 )
+
+// User coalesces the optional ID and Email fields.
+func (i *UserInput) User() string {
+        if i.UserID != "" {
+                return i.UserID
+        } else {
+                return i.UserEmail
+        }
+}
 
 // ListUsers returns the full list of users for the current organization.
 func (c *Client) ListUsers() (*Users, error) {
@@ -32,50 +49,24 @@ func (c *Client) ListUsers() (*Users, error) {
         return users, err
 }
 
-// CreateUserInput is used as input to the CreateUser function.
-type CreateUserInput struct {
-        Email string `json:"email"`
-        Team  struct {
-                ID string `json:"id"`
-        } `json:"team"`
-}
-
-// CreateUser creates a new user with the given name
-func (c *Client) CreateUser(i CreateUserInput) (*User, error) {
+// AddUser creates a new user with the given name
+func (c *Client) AddUser(i UserInput) (*User, error) {
         user := new(User)
         _, err := c.Post("/users", i, user)
         return user, err
 }
 
-// GetUserInput is used as input to the GetUser function.
-type GetUserInput struct {
-        ID    string `json:"id"`
-        Email string `json:"email"`
-}
-
 // GetUser returns a particular user looked up by ID
-func (c *Client) GetUser(i GetUserInput) (*User, error) {
+func (c *Client) GetUser(i UserInput) (*User, error) {
         user := new(User)
-        if i.ID == "" {
-                i.ID = i.Email
-        }
-        path := fmt.Sprintf("/users/%s", i.ID)
+        path := fmt.Sprintf("/users/%s", i.User())
         _, err := c.Get(path, user)
         return user, err
 }
 
-// DeleteUserInput is used as input to the DeleteUser function.
-type DeleteUserInput struct {
-        ID    string `json:"id"`
-        Email string `json:"email"`
-}
-
-// DeleteUser deletes a particular team looked up by ID
-func (c *Client) DeleteUser(i DeleteUserInput) error {
-        if i.ID == "" {
-                i.ID = i.Email
-        }
-        path := fmt.Sprintf("/users/%s", i.ID)
+// DeleteUser deletes a particular user looked up by ID
+func (c *Client) DeleteUser(i UserInput) error {
+        path := fmt.Sprintf("/users/%s", i.User())
         _, err := c.Delete(path)
         return err
 }
