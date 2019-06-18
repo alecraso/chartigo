@@ -34,7 +34,7 @@ import (
 )
 
 func main() {
-        client := chartigo.NewClient(chartigo.NewClientInput{Org: "my_org"})
+        client := chartigo.NewClient("my_org")
 
         teams, err := client.ListTeams()
         if err != nil {
